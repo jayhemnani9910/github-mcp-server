@@ -330,3 +330,50 @@ func Test_repositoryResourceContentsHandler_NetworkError(t *testing.T) {
 	require.Nil(t, resp)
 	require.ErrorContains(t, err, "failed to get raw content")
 }
+
+func Test_expandRepoResourceURI(t *testing.T) {
+	tests := []struct {
+		name     string
+		sha      string
+		ref      string
+		path     string
+		expected string
+	}{
+		{
+			name:     "ascii path on branch",
+			ref:      "refs/heads/feature/x",
+			path:     "docs/a b.md",
+			expected: "repo://owner/repo/refs/heads/feature%2Fx/contents/docs/a%20b.md",
+		},
+		{
+			name:     "non-ascii path",
+			sha:      "abc123",
+			path:     "testdata/ملف.txt",
+			expected: "repo://owner/repo/sha/abc123/contents/testdata/%D9%85%D9%84%D9%81.txt",
+		},
+		{
+			name:     "non-ascii tag",
+			ref:      "refs/tags/v1-é",
+			path:     "README.md",
+			expected: "repo://owner/repo/refs/tags/v1-%C3%A9/contents/README.md",
+		},
+		{
+			name:     "literal percent in path",
+			path:     "patches/%D9.patch",
+			expected: "repo://owner/repo/contents/patches/%25D9.patch",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			uri, err := expandRepoResourceURI("owner", "repo", tc.sha, tc.ref, strings.Split(tc.path, "/"))
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, uri)
+
+			parsed, err := url.Parse(uri)
+			require.NoError(t, err)
+			_, path, _ := strings.Cut(parsed.Path, "/contents/")
+			require.Equal(t, tc.path, path)
+		})
+	}
+}

@@ -250,50 +250,77 @@ func RepositoryResourceContentsHandler(resourceURITemplate *uritemplate.Template
 // expandRepoResourceURI builds a resource URI using the appropriate URI template
 // based on the provided parameters (sha, ref, or default).
 func expandRepoResourceURI(owner, repo, sha, ref string, pathParts []string) (string, error) {
-	baseValues := uritemplate.Values{
-		"owner": uritemplate.String(owner),
-		"repo":  uritemplate.String(repo),
-		"path":  uritemplate.List(pathParts...),
+	values := map[string]string{
+		"owner": owner,
+		"repo":  repo,
 	}
 
 	switch {
 	case sha != "":
-		baseValues["sha"] = uritemplate.String(sha)
-		return repositoryResourceCommitContentURITemplate.Expand(baseValues)
+		values["sha"] = sha
+		return expandRepoResourceTemplate(repositoryResourceCommitContentURITemplate, values, pathParts), nil
 
 	case ref != "":
 		// Parse ref to determine which template to use
 		switch {
 		case strings.HasPrefix(ref, "refs/heads/"):
 			branch := strings.TrimPrefix(ref, "refs/heads/")
-			baseValues["branch"] = uritemplate.String(branch)
-			return repositoryResourceBranchContentURITemplate.Expand(baseValues)
+			values["branch"] = branch
+			return expandRepoResourceTemplate(repositoryResourceBranchContentURITemplate, values, pathParts), nil
 
 		case strings.HasPrefix(ref, "refs/tags/"):
 			tag := strings.TrimPrefix(ref, "refs/tags/")
-			baseValues["tag"] = uritemplate.String(tag)
-			return repositoryResourceTagContentURITemplate.Expand(baseValues)
+			values["tag"] = tag
+			return expandRepoResourceTemplate(repositoryResourceTagContentURITemplate, values, pathParts), nil
 
 		case strings.HasPrefix(ref, "refs/pull/") && strings.HasSuffix(ref, "/head"):
 			// Extract PR number from "refs/pull/{number}/head"
 			prPart := strings.TrimPrefix(ref, "refs/pull/")
 			prNumber := strings.TrimSuffix(prPart, "/head")
-			baseValues["prNumber"] = uritemplate.String(prNumber)
-			return repositoryResourcePrContentURITemplate.Expand(baseValues)
+			values["prNumber"] = prNumber
+			return expandRepoResourceTemplate(repositoryResourcePrContentURITemplate, values, pathParts), nil
 
 		case looksLikeSHA(ref):
 			// ref is actually a SHA (e.g., from resolveGitReference)
-			baseValues["sha"] = uritemplate.String(ref)
-			return repositoryResourceCommitContentURITemplate.Expand(baseValues)
+			values["sha"] = ref
+			return expandRepoResourceTemplate(repositoryResourceCommitContentURITemplate, values, pathParts), nil
 
 		default:
 			// For other refs (like a branch name without refs/heads/ prefix),
 			// treat it as a branch
-			baseValues["branch"] = uritemplate.String(ref)
-			return repositoryResourceBranchContentURITemplate.Expand(baseValues)
+			values["branch"] = ref
+			return expandRepoResourceTemplate(repositoryResourceBranchContentURITemplate, values, pathParts), nil
 		}
 
 	default:
-		return repositoryResourceContentURITemplate.Expand(baseValues)
+		return expandRepoResourceTemplate(repositoryResourceContentURITemplate, values, pathParts), nil
 	}
+}
+
+// expandRepoResourceTemplate expands a repository resource template without
+// uritemplate's Expand, which percent-encodes non-ASCII runes incorrectly.
+func expandRepoResourceTemplate(tmpl *uritemplate.Template, values map[string]string, pathParts []string) string {
+	uri := tmpl.Raw()
+	for name, value := range values {
+		uri = strings.ReplaceAll(uri, "{"+name+"}", escapeURITemplateValue(value))
+	}
+	var path strings.Builder
+	for _, part := range pathParts {
+		path.WriteString("/" + escapeURITemplateValue(part))
+	}
+	return strings.Replace(uri, "{/path*}", path.String(), 1)
+}
+
+// escapeURITemplateValue percent-encodes every UTF-8 byte outside the RFC 3986 unreserved set.
+func escapeURITemplateValue(value string) string {
+	var b strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '-' || c == '.' || c == '_' || c == '~' {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
 }
